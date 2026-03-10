@@ -1,0 +1,21 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model whats_app_session {
+  id        Int      @id @default(autoincrement())
+  sessionId String   @unique
+  serverId  Int
+  creds     Json?
+  keys      Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([sessionId], map: "idx_whats_app_session_sessionId")
+  @@index([serverId], map: "idx_whats_app_session_serverId")
+}
