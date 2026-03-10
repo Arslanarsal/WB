@@ -5,7 +5,6 @@ import {
   Get,
   Param,
   Res,
-  NotFoundException,
 } from '@nestjs/common';
 import { WhatsappService } from './whatsapp.service';
 import {

@@ -1,4 +1,3 @@
-import { Logger } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
 import { initAuthCreds, BufferJSON } from '@whiskeysockets/baileys';
 
@@ -6,7 +5,6 @@ export const createPrismaAuthState = async (
   sessionId: string,
   prisma: PrismaClient,
 ) => {
-  const logger = new Logger(createPrismaAuthState.name);
   let writeTimeout: NodeJS.Timeout | undefined = undefined;
 
   const initialData = await prisma.whats_app_session.findUnique({

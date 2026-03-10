@@ -36,7 +36,6 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     const response = ctx.getResponse<Response>();
     const request = ctx.getRequest();
 
-    // Log the error for debugging (with special handling for timeout errors)
     if (this.isBaileysTimeoutError(exception)) {
       this.logger.warn(
         `Timeout exception handled: ${exception?.message || 'Unknown timeout'}`,
@@ -55,7 +54,6 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     let errorDetails: any = null;
 
     if (exception instanceof HttpException) {
-      // Handle HTTP exceptions
       statusCode = exception.getStatus();
       const errorResponse = exception.getResponse();
       errorMessage =
@@ -64,7 +62,6 @@ export class GlobalExceptionFilter implements ExceptionFilter {
           : exception.message;
       errorDetails = typeof errorResponse === 'object' ? errorResponse : null;
     } else {
-      // Handle Baileys timeout errors specifically
       if (this.isBaileysTimeoutError(exception)) {
         statusCode = HttpStatus.REQUEST_TIMEOUT;
         errorMessage =
@@ -77,7 +74,6 @@ export class GlobalExceptionFilter implements ExceptionFilter {
           },
         );
       } else if (this.isFileSystemError(exception)) {
-        // Handle file system errors (ENOENT, file not found, etc.)
         statusCode = HttpStatus.BAD_REQUEST;
         errorMessage = 'Invalid media file path or file not found';
         this.logger.warn('File system error caught and handled gracefully', {
@@ -86,12 +82,10 @@ export class GlobalExceptionFilter implements ExceptionFilter {
           errorCode: exception?.code,
         });
       } else {
-        // Handle other non-HTTP exceptions
         statusCode = exception?.status || HttpStatus.INTERNAL_SERVER_ERROR;
         errorMessage = exception?.message || 'Internal server error';
       }
 
-      // Include additional error details in development
       if (process.env.NODE_ENV !== 'production') {
         errorDetails = {
           name: exception?.name,
@@ -100,7 +94,6 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       }
     }
 
-    // Ensure errorMessage is always an array
     const messages = Array.isArray(errorMessage)
       ? errorMessage
       : [errorMessage];

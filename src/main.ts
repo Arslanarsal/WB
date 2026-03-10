@@ -9,12 +9,10 @@ async function bootstrap() {
     const app = await NestFactory.create(AppModule);
     const configService = app.get(ConfigService);
 
-    // Configure body parser limits
     app.use(json({ limit: '50mb' }));
     app.use(urlencoded({ limit: '50mb', extended: true }));
 
     app.setGlobalPrefix('api/v1');
-    // if (configService.get('NODE_ENV') !== 'production') {
     const swaggerConfig = new DocumentBuilder()
       .setTitle('Balieys-API')
       .addCookieAuth()
@@ -24,7 +22,6 @@ async function bootstrap() {
       .build();
     const document = SwaggerModule.createDocument(app, swaggerConfig);
     SwaggerModule.setup('api', app, document);
-    // }
 
     const port = configService.get('PORT', 3000);
     await app.listen(port);
@@ -35,12 +32,10 @@ async function bootstrap() {
   }
 }
 
-// Handle unhandled promise rejections (like Baileys timeout errors)
 process.on('unhandledRejection', (reason: any, promise) => {
   console.error('🔥 Unhandled Promise Rejection at:', promise);
   console.error('Reason:', reason?.message || reason);
 
-  // Check if it's a Baileys timeout error
   if (
     reason?.message?.includes('Timed Out') ||
     reason?.output?.statusCode === 408
@@ -54,15 +49,12 @@ process.on('unhandledRejection', (reason: any, promise) => {
     );
   }
 
-  // Don't exit the process for timeout errors, just log them
 });
 
-// Handle uncaught exceptions
 process.on('uncaughtException', (error) => {
   console.error('🔥 Uncaught Exception:', error.message);
   console.error('Stack:', error.stack);
 
-  // Check if it's a Baileys timeout error
   if (error.message?.includes('Timed Out')) {
     console.warn(
       '⏱️  WhatsApp timeout error detected as uncaught exception - continuing...',
@@ -71,7 +63,6 @@ process.on('uncaughtException', (error) => {
     (error as any).code === 'ENOENT' &&
     error.message?.includes('no such file or directory')
   ) {
-    // Handle file not found errors - don't crash the server
     console.warn('📁 File not found error detected - continuing operation...');
     console.warn('File path attempted:', (error as any).path);
   } else {
@@ -80,7 +71,6 @@ process.on('uncaughtException', (error) => {
   }
 });
 
-// Graceful shutdown
 process.on('SIGTERM', () => {
   console.log('👋 Received SIGTERM, shutting down gracefully');
   process.exit(0);

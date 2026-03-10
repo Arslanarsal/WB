@@ -14,7 +14,7 @@ import {
 } from '@whiskeysockets/baileys';
 import * as qrcode from 'qrcode';
 import axios from 'axios';
-import { Injectable, NotFoundException , Logger } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { createPrismaAuthState } from './helpers/prisma-auth-state';
 import { StorageService } from './storage-service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -81,7 +81,6 @@ export class SessionManager {
         }
       });
 
-      // Wrap socket operations in try-catch for error handling
       this.wrapSocketWithErrorHandling(id, sock);
 
       sock.ev.on('messages.upsert', async (m) => {
@@ -120,22 +119,6 @@ export class SessionManager {
               this.sendUpdateMessageHookWithRetry(body);
             }
           }
-          // // Check for conversation string in various possible nested locations, safely
-          // else if (
-          //   update &&
-          //   typeof update === 'object' &&
-          //   update.hasOwnProperty('message') &&
-          //   (
-          //     // Direct conversation
-          //     (update.message && typeof update.message.conversation === 'string') ||
-          //     // Nested: message.editedMessage.message.conversation
-          //     (update.message?.editedMessage?.message && typeof update.message.editedMessage.message.conversation === 'string')
-          //   )
-          // ) {
-          //   const body = { id:messageId,hasStatus : false, conversation:update.message.conversation, at: new Date()}
-          //   this.logger.log(` Message update body: ${JSON.stringify(body)}`);
-          //   await this.sendUpdateMessageHookWithRetry(body);
-          // }
         });
       }
       const session: Session = {
@@ -144,7 +127,6 @@ export class SessionManager {
       };
       this.sessions.set(id, session);
 
-      // Log phone number if available in auth state
       const sessionPhone =sock?.user?.id?.split(':')[0] || 'Pending authentication';
 
       this.logger.log(
@@ -212,7 +194,6 @@ export class SessionManager {
         return;
       }
 
-      // Handle reconnection with exponential backoff
       const attempts = this.reconnectionAttempts.get(id) || 0;
       if (attempts < this.maxReconnectionAttempts) {
         const delay = Math.min(1000 * Math.pow(2, attempts), 30000); 
@@ -241,13 +222,12 @@ export class SessionManager {
     if (connection === 'open') {
       const phoneNumber = sock.user?.id?.split(':')[0] || 'Unknown';
       this.logger.log(`[${id}] ✅ WhatsApp connected! Phone: ${phoneNumber}`);
-      this.reconnectionAttempts.delete(id); // Reset attempts on successful connection
+      this.reconnectionAttempts.delete(id);
       
     }
   }
 
   private wrapSocketWithErrorHandling(id: string, sock: any) {
-    // Wrap critical socket methods with error handling
     const originalSendMessage = sock.sendMessage;
     sock.sendMessage = async (...args: any[]) => {
       try {
@@ -269,7 +249,6 @@ export class SessionManager {
       }
     };
 
-    // Wrap query method
     const originalQuery = sock.query;
     if (originalQuery) {
       sock.query = async (...args: any[]) => {
@@ -299,7 +278,6 @@ export class SessionManager {
 
     if (!messages || messages.length === 0) return;
 
-    // Validate session is still active before processing messages
     if (!this.getSession(id)) {
       this.logger.warn(
         `[${id}] Session no longer active, skipping message processing`,
@@ -329,16 +307,13 @@ export class SessionManager {
         const payload = await this.messageHandler(message);
        
         if (payload.shouldNotifyWebhook) {
-          // const reply = message.message.conversation;
           await this.sendWebhookWithRetry(payload);
-          // await sock.sendMessage(remoteJid, { text: reply });
         }
       } catch (messageError: any) {
         this.logger.error(
           `[${id}] Error processing message ${message?.key?.id}:`,
           messageError?.message || 'Unknown error',
         );
-        // Continue processing other messages even if one fails
       }
     }
   }
@@ -357,18 +332,17 @@ export class SessionManager {
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
-        // Use shorter timeout since media is now uploaded to storage (no large buffers)
         const response = await axios.post(
           `${webhookUrl}/message-update`,
           payload,
           {
-            timeout: 50000, // 30 second timeout
+            timeout: 50000,
             headers: {
               'Content-Type': 'application/json',
               'User-Agent': 'WhatsApp-Bot/1.0',
             },
             // Prevent axios from throwing on HTTP error status codes
-            validateStatus: (status) => status < 500, // Only retry on 5xx errors
+            validateStatus: (status) => status < 500,
           },
         );
 
@@ -380,7 +354,6 @@ export class SessionManager {
             `Webhook returned status ${response.status} on attempt ${attempt}`,
           );
           if (response.status < 500) {
-            // Don't retry 4xx errors (client errors)
             return;
           }
         }
@@ -402,7 +375,6 @@ export class SessionManager {
           return;
         }
 
-        // Exponential backoff with jitter
         const backoffDelay =
           delay * Math.pow(2, attempt - 1) + Math.random() * 1000;
         console.log(`Retrying webhook in ${Math.round(backoffDelay)}ms...`);
@@ -422,21 +394,6 @@ export class SessionManager {
       return;
     }
 
-    // Calculate and log payload size
-    // const payloadSizeInfo = this.calculatePayloadSize(payload);
-    // if (!payloadSizeInfo.isAllowed) {
-    //   console.warn(
-    //     `Payload is too large, skipping webhook call because it exceeds 50MB ${payloadSizeInfo.mediaBufferSizeMB}`,
-    //   );
-    //   return;
-    // }
-
-    // // Show warning for large payloads
-    // if (payloadSizeInfo.sizeWarning) {
-    //   console.warn(payloadSizeInfo.sizeWarning);
-    // }
-
-    // Upload large media files to storage and replace buffer with URL
     if (payload.hasMedia) {
       try {
         const mediaObject = {
@@ -448,9 +405,6 @@ export class SessionManager {
         const company = payload.companyPhone || 'default';
         const contact = payload.userPhone || 'unknown';
 
-        // console.log(
-        //   `Uploading media to storage: ${payloadSizeInfo.mediaBufferSizeMB}`,
-        // );
         const mediaUrl = await this.storageService.uploadMedia(
           mediaObject,
           company,
@@ -458,7 +412,6 @@ export class SessionManager {
         );
 
         if (mediaUrl) {
-          // Replace the buffer with the URL and add size info
           payload.mediaUrl = mediaUrl;
           payload.mediaSize = payload.mediaBuffer.length;
           console.log(`✅ Media uploaded successfully: ${mediaUrl}`);
@@ -470,16 +423,13 @@ export class SessionManager {
       }
     }
     if (payload.hasMedia && !payload.isAudio) {
-      // Remove buffer if it's not an audio file
       delete payload.mediaBuffer;
     }
-    console.log('Sending payload to webhook:', payload);
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
-        // Use shorter timeout since media is now uploaded to storage (no large buffers)
         const response = await axios.post(webhookUrl, payload, {
-          timeout: 50000, // 30 second timeout
+          timeout: 50000,
           headers: {
             'Content-Type': 'application/json',
             'User-Agent': 'WhatsApp-Bot/1.0',
@@ -496,7 +446,6 @@ export class SessionManager {
             `Webhook returned status ${response.status} on attempt ${attempt}`,
           );
           if (response.status < 500) {
-            // Don't retry 4xx errors (client errors)
             return;
           }
         }
@@ -518,7 +467,6 @@ export class SessionManager {
           return;
         }
 
-        // Exponential backoff with jitter
         const backoffDelay =
           delay * Math.pow(2, attempt - 1) + Math.random() * 1000;
         console.log(`Retrying webhook in ${Math.round(backoffDelay)}ms...`);
@@ -528,7 +476,6 @@ export class SessionManager {
   }
 
   private isRetryableError(error: any): boolean {
-    // Retry on network errors and 5xx server errors
     const retryableCodes = [
       'ECONNRESET',
       'ENOTFOUND',
@@ -544,43 +491,6 @@ export class SessionManager {
 
   private sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
-  }
-
-  private calculatePayloadSize(payload: any): {
-    totalSizeBytes?: number;
-    totalSizeMB?: string;
-    mediaBufferSizeBytes?: number;
-    mediaBufferSizeMB?: string;
-    sizeWarning?: string;
-    isAllowed: boolean;
-  } {
-    const result: any = {
-      isAllowed: true,
-    };
-
-    // Calculate mediaBuffer size separately if it exists
-    if (payload.mediaBuffer && Buffer.isBuffer(payload.mediaBuffer)) {
-      const mediaBufferSizeBytes = payload.mediaBuffer.length;
-      const mediaBufferSizeMB = (mediaBufferSizeBytes / (1024 * 1024)).toFixed(
-        2,
-      );
-
-      result.mediaBufferSizeBytes = mediaBufferSizeBytes;
-      result.mediaBufferSizeMB = `${mediaBufferSizeMB} MB`;
-
-      // Add warnings for large payloads
-      if (mediaBufferSizeBytes > 50 * 1024 * 1024) {
-        // 50MB
-        result.sizeWarning = `⚠️  LARGE PAYLOAD: MediaBuffer is ${mediaBufferSizeMB} MB - uploading to storage instead`;
-        result.isAllowed = false;
-      } else if (mediaBufferSizeBytes > 10 * 1024 * 1024) {
-        // 10MB
-        result.sizeWarning = `⚡ Large media file: ${mediaBufferSizeMB} MB - will upload to storage`;
-        result.isAllowed = true;
-      }
-    }
-
-    return result;
   }
 
   private async messageHandler(data: any): Promise<{
@@ -623,13 +533,12 @@ export class SessionManager {
       ) {
         const message = data.message;
         const prefix = data.key.fromMe ? 'company' : 'client';
-        // Object.hasOwnProperty.call(message, 'conversation') && (payload.text = message.conversation);
         if (message.hasOwnProperty('extendedTextMessage')) {
           payload.text = message?.extendedTextMessage?.text;
           payload.info = `<> ${prefix} reply message`;
         } else if (message.hasOwnProperty('audioMessage')) {
           payload.isAudio = true;
-          // payload.mediaInfo = data;
+
           payload.hasMedia = true;
           payload.mediaBuffer = await downloadMediaMessage(data, 'buffer', {});
           payload.mediaType = message.audioMessage.mimetype;
@@ -637,21 +546,21 @@ export class SessionManager {
         } else if (message.hasOwnProperty('documentWithCaptionMessage')) {
           payload.hasDocument = true;
           payload.hasMedia = true;
-          // payload.mediaInfo = data;
+
           payload.mediaBuffer = await downloadMediaMessage(data, 'buffer', {});
           payload.mediaType = message.documentWithCaptionMessage.mimetype;
           payload.text = message.documentWithCaptionMessage.message.documentMessage.caption;
           payload.info = `<> ${prefix} PDF with caption message`;
         } else if (message.hasOwnProperty('imageMessage')) {
           payload.hasMedia = true;
-          // payload.mediaInfo = data;
+
           payload.mediaBuffer = await downloadMediaMessage(data, 'buffer', {});
           payload.mediaType = message.imageMessage.mimetype;
           payload.text = message.imageMessage.caption || '';
           payload.info = `<> ${prefix} image message/image with caption`;
         } else if (message.hasOwnProperty('videoMessage')) {
           payload.hasMedia = true;
-          // payload.mediaInfo = data;
+
           payload.mediaBuffer = await downloadMediaMessage(data, 'buffer', {});
           payload.mediaType = message.videoMessage.mimetype;
           payload.text = message.videoMessage.caption || '';
@@ -659,7 +568,7 @@ export class SessionManager {
         } else if (message.hasOwnProperty('documentMessage')) {
           payload.hasDocument = true;
           payload.hasMedia = true;
-          // payload.mediaInfo = data;
+
           payload.mediaBuffer = await downloadMediaMessage(data, 'buffer', {});
           payload.mediaType = message.documentMessage.mimetype;
           payload.info = `<> ${prefix} PDF without caption (documentMessage)`;
@@ -692,9 +601,7 @@ export class SessionManager {
         return payload;
       }
     } catch (e) {
-      console.log('error cause');
-      console.log(data);
-      console.log(e);
+      this.logger.error('messageHandler error', { data, error: e });
       payload.shouldNotifyWebhook = false;
       return payload;
     }
@@ -732,7 +639,7 @@ export class SessionManager {
     message?: string;
     phoneNumber?: string;
   } {
-    const session = this.sessions.get(id); // Assume 'this.sessions' stores BaileysSession objects
+    const session = this.sessions.get(id);
 
     if (!session) {
       return {
@@ -742,13 +649,11 @@ export class SessionManager {
       };
     }
     this.logger.log('session', session.sock.user);
-    // Get the status from the session, default to 'UNKNOWN' if not set
     const status = (session.connectionStatus || 'UNKNOWN').toUpperCase();
-    const isActive = status !== 'CLOSE'; // Only OPEN means active
+    const isActive = status !== 'CLOSE';
 
     const phoneNumber = session.sock?.user?.id?.split(':')[0] || 'Unknown';
 
-    // Log based on the real-time status
     this.logger.log(`[${id}] Session status: ${status}, Phone: ${phoneNumber}`);
 
     if (status === 'CLOSE' && session.lastDisconnectError) {
@@ -788,25 +693,20 @@ export class SessionManager {
 
     try {
       if (session && session.sock) {
-        // Clear health check interval
         const sock = session.sock as any;
         if (sock._healthCheckInterval) {
           clearInterval(sock._healthCheckInterval);
           delete sock._healthCheckInterval;
         }
 
-        // Only try to logout if the socket is still open
         this.logger.log('sock.ws?.readyState', sock.ws?.readyState);
-        // if (sock.ws?.readyState === 1) {
         await session.sock.logout();
-        // }
       }
     } catch (error: any) {
       this.logger.warn(
         `[${id}] Error during logout: ${error?.message || 'Unknown error'}`,
       );
     } finally {
-      // Clean up tracking data
       this.sessions.delete(id);
       this.qrCodes.delete(id);
       this.reconnectionAttempts.delete(id);
@@ -900,11 +800,9 @@ export class SessionManager {
       return false;
     }
     try {
-      // Add timeout to prevent hanging
       const timeoutPromise = new Promise((_, reject) => {
         setTimeout(() => reject(new Error('Number check timeout')), 10000);
       });
-
       const checkPromise = sock.onWhatsApp(`${number}@s.whatsapp.net`);
       const result = await Promise.race([checkPromise, timeoutPromise]);
       return Boolean(result?.[0]?.exists);
@@ -924,7 +822,6 @@ export class SessionManager {
     }
     try {
       const jid = `${number}@s.whatsapp.net`;
-      // Add timeout to prevent hanging
       const timeoutPromise = new Promise((_, reject) => {
         setTimeout(() => reject(new Error('Profile picture timeout')), 10000);
       });

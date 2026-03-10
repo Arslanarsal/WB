@@ -10,9 +10,7 @@ export class WhatsappService implements OnModuleInit {
   constructor(
     private prisma: PrismaService,
     private manager: SessionManager,
-  ) {
-    // SessionManager is now injected via dependency injection
-  }
+  ) {}
 
   async onModuleInit() {
     try {
@@ -24,7 +22,6 @@ export class WhatsappService implements OnModuleInit {
 
       console.log(`Found ${sessionsFromDb.length} sessions to initialize`);
 
-      // Initialize sessions with error handling for each
       for (const session of sessionsFromDb) {
         try {
           console.log(`Initializing session: ${session.sessionId}`);
@@ -34,7 +31,6 @@ export class WhatsappService implements OnModuleInit {
             `Failed to initialize session ${session.sessionId}:`,
             sessionError?.message || 'Unknown error',
           );
-          // Continue with other sessions even if one fails
         }
       }
 
@@ -44,14 +40,11 @@ export class WhatsappService implements OnModuleInit {
         'Error initializing WhatsApp service:',
         error?.message || 'Unknown error',
       );
-      // Don't throw the error, just log it and continue
-      // This ensures the app can start even if there are permission issues
     }
   }
 
   async connect(id: string) {
     try {
-      // Check if session already exists
       const existingSession = this.manager.getSession(id);
       if (existingSession) {
         const sessionStatus = this.manager.getSessionStatus(id);
@@ -73,7 +66,6 @@ export class WhatsappService implements OnModuleInit {
         }
       }
 
-      // Create new session
       return await this.manager.createSession(id);
     } catch (error: any) {
       console.error(
@@ -94,7 +86,6 @@ export class WhatsappService implements OnModuleInit {
     if (!sock) throw new NotFoundException(`No active session for ${id}`);
     const remoteJid = `${number}@s.whatsapp.net`;
     try {
-      // Add timeout to prevent hanging
       const res = await sock.sendMessage(remoteJid, {
         text: message,
         mentions,
@@ -123,7 +114,6 @@ export class WhatsappService implements OnModuleInit {
     mentions?: string[],
   ): Promise<any> {
     try {
-      // Validate URL format - must be a proper HTTP/HTTPS URL
       if (!url || (!url.startsWith('http://') && !url.startsWith('https://'))) {
         throw new Error(
           `Invalid media URL format: ${url}. URL must start with http:// or https://`,
@@ -136,7 +126,6 @@ export class WhatsappService implements OnModuleInit {
       const urlParts = urlWithoutParams.split('.');
       const extension = urlParts[urlParts.length - 1].toLowerCase();
 
-      // Map extensions to mime types
       const mimeTypes = {
         pdf: 'application/pdf',
         jpg: 'image/jpeg',
@@ -216,18 +205,16 @@ export class WhatsappService implements OnModuleInit {
             audio: { url: url },
             mimetype: mimeType,
             caption,
-            // ptt: isVoiceMode // mp3 not working from last week on android as voice mesage
             mentions,
           });
         } else if (mimeType === MediaType.OGG) {
           return sock.sendMessage(remoteJid, {
             audio: { url: url },
             mimetype: mimeType,
-            ptt: isVoiceMode, // Set to true if you want to send as voice note
+            ptt: isVoiceMode,
             mentions,
           });
         } else {
-          // Handle other document types
           return sock.sendMessage(remoteJid, {
             document: { url: url },
             mimetype: mimeType,
@@ -256,9 +243,6 @@ export class WhatsappService implements OnModuleInit {
   getSessionStatus(id: string) {
     return this.manager.getSessionStatus(id);
   }
-  // async getQRCode(id: string): Promise<any> {
-  //   return this.manager.getQRCode(id);
-  // }
   async listConnectedSessions() {
     return await this.manager.listAllConnectedSessions();
   }
@@ -275,7 +259,6 @@ export class WhatsappService implements OnModuleInit {
   }
 
   async getQrCodeImage(id: string): Promise<Buffer | null> {
-    console.log(`called ${id}`);
     const imageBuffer = await this.manager.getQrCodeImage(id);
     if (!imageBuffer)
       throw new NotFoundException(
