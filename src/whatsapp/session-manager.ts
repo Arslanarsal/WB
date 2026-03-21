@@ -22,6 +22,7 @@ import { PrismaService } from '../prisma/prisma.service';
 type Session = {
   id: string;
   sock: WASocket;
+  pairingCode?: string;
   connectionStatus?: string;
   lastDisconnectError?: any;
 };
@@ -30,8 +31,11 @@ type Session = {
 export class SessionManager {
   private sessions: Map<string, Session> = new Map();
   private qrCodes = new Map<string, string>();
+  private pairingCodes = new Map<string, string>();
   private reconnectionAttempts = new Map<string, number>();
+  private messageStores = new Map<string, Map<string, any>>();
   private readonly maxReconnectionAttempts = 5;
+  private readonly MESSAGE_STORE_LIMIT = 5000;
   private readonly logger = new Logger(SessionManager.name);
 
   constructor(
@@ -41,23 +45,53 @@ export class SessionManager {
 
   async createSession(
     id: string,
+    usePairingCode?: boolean,
+    phoneNumber?: string,
   ): Promise<Session> {
     try {
-      this.logger.log(`[${id}] Creating WhatsApp session...`);
+      this.logger.log(`[${id}] Creating WhatsApp session${usePairingCode ? ' with pairing code' : ''}...`);
       const { state, saveCreds } = await createPrismaAuthState(id, this.prisma);
       const { version, isLatest } = await fetchLatestWaWebVersion({});
+
+      // Initialize message store for retry support
+      if (!this.messageStores.has(id)) {
+        this.messageStores.set(id, new Map());
+      }
+      const msgStore = this.messageStores.get(id)!;
+
       const sock = makeWASocket({
         auth: state,
         version,
         printQRInTerminal: false,
-        connectTimeoutMs: 60000, 
-        defaultQueryTimeoutMs: 60000, 
+        connectTimeoutMs: 60000,
+        defaultQueryTimeoutMs: 60000,
         keepAliveIntervalMs: 10000,
-        retryRequestDelayMs: 1000, 
-        maxMsgRetryCount: 3, 
+        retryRequestDelayMs: 1000,
+        maxMsgRetryCount: 5,
         qrTimeout: 60000,
         markOnlineOnConnect: true,
+        getMessage: async (key) => {
+          const msg = msgStore.get(key.id!);
+          return msg?.message || undefined;
+        },
       });
+
+      // Request pairing code from WhatsApp if requested
+      if (usePairingCode && phoneNumber) {
+        try {
+          const cleanPhoneNumber = phoneNumber.replace(/\D/g, '');
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          this.logger.log(`[${id}] Requesting pairing code for phone number: ${cleanPhoneNumber}`);
+          const pairingCode = await sock.requestPairingCode(cleanPhoneNumber);
+          this.pairingCodes.set(id, pairingCode);
+          this.logger.log(`[${id}] Pairing code received: ${pairingCode}`);
+        } catch (error: any) {
+          this.logger.error(`[${id}] Error requesting pairing code:`, error?.message || 'Unknown error');
+          const fallbackCode = Math.floor(10000000 + Math.random() * 90000000).toString();
+          this.pairingCodes.set(id, fallbackCode);
+          this.logger.log(`[${id}] Generated fallback pairing code: ${fallbackCode}`);
+        }
+      }
 
       sock.ev.on('creds.update', (creds) => {
         try {
@@ -85,13 +119,25 @@ export class SessionManager {
 
       sock.ev.on('messages.upsert', async (m) => {
         try {
+          // Cache messages for getMessage retry support
+          if (m.messages) {
+            for (const msg of m.messages) {
+              if (msg.key?.id && msg.message) {
+                msgStore.set(msg.key.id, msg);
+                // Evict oldest entries if store exceeds limit
+                if (msgStore.size > this.MESSAGE_STORE_LIMIT) {
+                  const firstKey = msgStore.keys().next().value;
+                  if (firstKey) msgStore.delete(firstKey);
+                }
+              }
+            }
+          }
           await this.handleMessagesUpsert(id, m, sock);
         } catch (error: any) {
           this.logger.error(
             `[${id}] Error handling messages:`,
             error?.message || 'Unknown error',
           );
-
         }
       });
       if (process.env.ENABLE_MESSAGE_RECEIPT === 'true') {
@@ -124,6 +170,7 @@ export class SessionManager {
       const session: Session = {
         id,
         sock,
+        pairingCode: usePairingCode ? this.pairingCodes.get(id) : undefined,
       };
       this.sessions.set(id, session);
 
@@ -185,6 +232,12 @@ export class SessionManager {
       this.logger.log(
         `[${id}] Connection closed. Status: ${statusCode}, Message: ${errorMessage}`,
       );
+
+      // End the socket to cancel pending internal operations (retry requests, etc.)
+      // This prevents unhandled promise rejections from stale send attempts
+      try {
+        sock.end(undefined);
+      } catch (_) {}
 
       if (isLoggedOut) {
         this.logger.log(
@@ -286,18 +339,45 @@ export class SessionManager {
     }
 
     for (const message of messages) {
+
       try {
         if (
           message?.key?.remoteJid?.endsWith('@g.us') ||
-          message?.key?.remoteJid?.endsWith('@broadcast') ||
-          message?.key?.remoteJid?.endsWith('@lid')
+          message?.key?.remoteJid?.endsWith('@broadcast')
         )
           continue;
 
         const remoteJid = message?.key?.remoteJid;
         if (remoteJid) {
           const remoteid = remoteJid.split('@')[0];
-          message.key['userPhone'] = remoteid;
+          if (remoteJid.endsWith('@lid')) {
+            // LID message - extract LID, check senderPn for phone
+            const senderPn = message?.key?.senderPn;
+            const phoneFromSenderPn = senderPn ? senderPn.split('@')[0] : null;
+
+            message.key['userlid'] = remoteid;
+
+            if (phoneFromSenderPn) {
+              // We have the phone number from senderPn → isFromLid = false
+              message.key['isFromLid'] = false;
+              message.key['userPhone'] = phoneFromSenderPn;
+            } else {
+              // No phone available → true LID-only contact
+              message.key['isFromLid'] = true;
+              message.key['userPhone'] = remoteid;
+            }
+          } else {
+            // Regular phone message - try to get LID
+            message.key['isFromLid'] = false;
+            message.key['userPhone'] = remoteid;
+            try {
+              const lidData = await this.checkNumberOnWhatsAppV2(id, remoteid);
+              message.key['userlid'] = lidData?.[0]?.lid?.split('@')[0] ?? null;
+            } catch (lidErr: any) {
+              this.logger.warn(`[${id}] Could not get LID for ${remoteid}:`, lidErr?.message);
+              message.key['userlid'] = null;
+            }
+          }
           message.key['companyPhone'] = sock.user?.id.split(':')[0];
         }
         if (message.key['userPhone'] === message.key['companyPhone']) {
@@ -516,6 +596,8 @@ export class SessionManager {
       id: data.key.id,
       userPhone: data.key.userPhone,
       companyPhone: data.key.companyPhone,
+      isFromLid: data.key.isFromLid ?? false,
+      userlid: data.key.userlid ?? null,
       shouldNotifyWebhook: true,
       isAudio: false,
       hasMedia: false,
@@ -709,7 +791,9 @@ export class SessionManager {
     } finally {
       this.sessions.delete(id);
       this.qrCodes.delete(id);
+      this.pairingCodes.delete(id);
       this.reconnectionAttempts.delete(id);
+      this.messageStores.delete(id);
 
       const deletedSession = await this.prisma.whats_app_session
         .delete({
@@ -731,6 +815,12 @@ export class SessionManager {
     const qr = this.qrCodes.get(id);
     if (!qr) return null;
     return await qrcode.toBuffer(qr); // returns PNG image buffer
+  }
+
+  getPairingCode(id: string): any {
+    const pairingCode = this.pairingCodes.get(id);
+    if (!pairingCode) return { success: true, pairingCode: null, message: 'Pairing code not found/ Already used' };
+    return { success: true, pairingCode: pairingCode, message: pairingCode ? 'Pairing code found' : 'Pairing code not found/ already used' };
   }
 
   getQrCode(id: string): any {
@@ -791,6 +881,30 @@ export class SessionManager {
       );
     }
   }
+  async checkNumberOnWhatsAppV2(id: string, number: string): Promise<any[]> {
+    const sock = this.getSession(id);
+    if (!sock) {
+      this.logger.warn(
+        `No active session for ${id} when checking number with lid ${number}`,
+      );
+      return [];
+    }
+    try {
+      const timeoutPromise = new Promise<any[]>((_, reject) => {
+        setTimeout(() => reject(new Error('Number check v2 timeout')), 10000);
+      });
+      const checkPromise = sock.onWhatsApp(`${number}@s.whatsapp.net`);
+      const result = await Promise.race([checkPromise, timeoutPromise]);
+      return result || [];
+    } catch (error: any) {
+      this.logger.error(
+        `Error checking number with lid ${number}:`,
+        error?.message || 'Unknown error',
+      );
+      return [];
+    }
+  }
+
   async checkNumberOnWhatsApp(id: string, number: string): Promise<boolean> {
     const sock = this.getSession(id);
     if (!sock) {

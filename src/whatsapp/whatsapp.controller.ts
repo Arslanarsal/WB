@@ -54,14 +54,14 @@ class SendTextDto {
 }
 class isOnWhatsAppDto {
   @ApiProperty({
-    example: '923557609998',
+    example: '923423407767',
   })
   number: string;
 }
 
 class SendMessageDto {
   @ApiProperty({
-    example: '923557609998',
+    example: '92423407767',
   })
   number: string;
 
@@ -79,6 +79,9 @@ class SendMessageDto {
 
   @ApiPropertyOptional()
   isVoiceMode?: boolean;
+
+  @ApiPropertyOptional({ description: 'Set true when sending to a LID instead of phone number' })
+  isFromLid?: boolean;
 
   @ApiPropertyOptional()
   mentions?: string[];
@@ -127,14 +130,20 @@ export class WhatsappController {
   @ApiBody({ type: ConnectDto })
   async connect(@Body() body: ConnectDto) {
     try {
+      if (body.usePairingCode && !body.phoneNumber) {
+        return { success: false, message: 'Phone number is required when using pairing code' };
+      }
 
       const result = await this.whatsappService.connect(
         body.id,
+        body.usePairingCode,
+        body.phoneNumber,
       );
       return {
         success: true,
         sessionId: result.id,
         message: 'Session Initialized successfully',
+        ...(result.pairingCode && { pairingCode: result.pairingCode }),
       };
     } catch (e) {
       return { success: false, message: e.message };
@@ -167,6 +176,18 @@ export class WhatsappController {
       return { success: false, message: e.message };
     }
   }
+  @Post(':id/is-on-whatsapp-with-lid')
+  @ApiOperation({ summary: 'Check if number is on WhatsApp and get LID' })
+  @ApiParam({ name: 'id', description: 'Session ID' })
+  @ApiBody({ type: isOnWhatsAppDto })
+  async isOnWhatsAppWithLid(@Param('id') id: string, @Body() body: isOnWhatsAppDto) {
+    try {
+      return await this.whatsappService.isOnWhatsAppWithLid(id, body.number);
+    } catch (e) {
+      return { success: false, message: e.message };
+    }
+  }
+
   @Post(':id/send-message')
   @ApiOperation({ summary: 'Send message ' })
   @ApiParam({ name: 'id', description: 'Session ID' })
@@ -178,6 +199,7 @@ export class WhatsappController {
           id,
           body.number,
           body.text,
+          body.isFromLid ?? false,
           body.mentions ?? [],
         );
         return { success: res.wb_id ? true : false, result: res };
@@ -187,6 +209,7 @@ export class WhatsappController {
           body?.url,
           body.number,
           body?.isVoiceMode ? true : false,
+          body.isFromLid ?? false,
           body.text,
           body.mentions ?? [],
         );
@@ -246,6 +269,13 @@ export class WhatsappController {
       message: result.message,
       sessions: result.sessions,
     };
+  }
+
+  @Get('sessions/pairingcode/:id')
+  @ApiOperation({ summary: 'Get the pairing code for a specific session' })
+  @ApiParam({ name: 'id', description: 'Session ID' })
+  async getPairingCode(@Param('id') id: string) {
+    return this.whatsappService.getPairingCode(id);
   }
 
   @Get('sessions/qrcode/:id')

@@ -29,4 +29,5 @@ export class SendMessageDto {
 
 export enum PhoneType {
   JID = '@s.whatsapp.net',
+  LID = '@lid',
 }

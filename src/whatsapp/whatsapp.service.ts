@@ -43,7 +43,7 @@ export class WhatsappService implements OnModuleInit {
     }
   }
 
-  async connect(id: string) {
+  async connect(id: string, usePairingCode?: boolean, phoneNumber?: string) {
     try {
       const existingSession = this.manager.getSession(id);
       if (existingSession) {
@@ -57,6 +57,7 @@ export class WhatsappService implements OnModuleInit {
             id,
             sock: existingSession,
             message: `[${id}] Session already exists and is active.`,
+            pairingCode: usePairingCode ? this.manager.getPairingCode(id)?.pairingCode : undefined,
           };
         } else {
           console.log(
@@ -66,7 +67,7 @@ export class WhatsappService implements OnModuleInit {
         }
       }
 
-      return await this.manager.createSession(id);
+      return await this.manager.createSession(id, usePairingCode, phoneNumber);
     } catch (error: any) {
       console.error(
         `Failed to connect session ${id}:`,
@@ -76,15 +77,20 @@ export class WhatsappService implements OnModuleInit {
     }
   }
 
+  async getPairingCode(sessionId: string) {
+    return this.manager.getPairingCode(sessionId);
+  }
+
   async sendText(
     id: string,
     number: string,
     message: string,
+    isFromLid: boolean = false,
     mentions?: string[],
   ) {
     const sock = this.manager.getSession(id);
     if (!sock) throw new NotFoundException(`No active session for ${id}`);
-    const remoteJid = `${number}@s.whatsapp.net`;
+    const remoteJid = isFromLid ? `${number}@lid` : `${number}@s.whatsapp.net`;
     try {
       const res = await sock.sendMessage(remoteJid, {
         text: message,
@@ -110,6 +116,7 @@ export class WhatsappService implements OnModuleInit {
     url: string,
     number: string,
     isVoiceMode = false,
+    isFromLid: boolean = false,
     caption?: string,
     mentions?: string[],
   ): Promise<any> {
@@ -172,7 +179,7 @@ export class WhatsappService implements OnModuleInit {
 
       const mimeType = mimeTypes[extension] || 'application/octet-stream';
 
-      const remoteJid = `${number}@s.whatsapp.net`;
+      const remoteJid = isFromLid ? `${number}@lid` : `${number}@s.whatsapp.net`;
 
       const res = await (() => {
         if (mimeType === MediaType.PDF) {
@@ -280,6 +287,10 @@ export class WhatsappService implements OnModuleInit {
 
   async isOnWhatsApp(id: string, number: string) {
     return await this.manager.checkNumberOnWhatsApp(id, number);
+  }
+
+  async isOnWhatsAppWithLid(id: string, number: string) {
+    return await this.manager.checkNumberOnWhatsAppV2(id, number);
   }
 
   async getProfilePic(id: string, number: string) {
