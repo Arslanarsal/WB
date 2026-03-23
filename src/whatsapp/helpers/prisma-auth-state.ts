@@ -27,6 +27,7 @@ export const createPrismaAuthState = async (
       clearTimeout(writeTimeout);
     }
     writeTimeout = setTimeout(async () => {
+      writeTimeout = undefined;
       try {
         const jsonData = {
           creds: JSON.parse(JSON.stringify(creds, BufferJSON.replacer)),
@@ -52,7 +53,7 @@ export const createPrismaAuthState = async (
           err,
         );
       }
-    }, 200);
+    }, 50);
   };
 
   return {
@@ -74,7 +75,14 @@ export const createPrismaAuthState = async (
             for (const id in data[keyType]) {
               const value = data[keyType][id];
               const dbKey = `${keyType}-${id}`;
-              keys[dbKey] = value;
+              if (value) {
+                keys[dbKey] = value;
+              } else {
+                // Baileys passes null/undefined to signal key deletion —
+                // keeping stale keys corrupts the Signal session and causes
+                // "Waiting for this message" on the recipient side.
+                delete keys[dbKey];
+              }
             }
           }
           debouncedSaveState();

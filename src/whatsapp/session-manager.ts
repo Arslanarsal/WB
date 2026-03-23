@@ -247,6 +247,17 @@ export class SessionManager {
         return;
       }
 
+      const isConflict =
+        statusCode === 440 || errorMessage?.toLowerCase()?.includes('conflict');
+
+      if (isConflict) {
+        this.logger.log(
+          `[${id}] ❌ Session conflict detected (Code: 440). Session keys are corrupted or another client connected. Removing session — a fresh QR scan is required.`,
+        );
+        this.removeSessionById(id);
+        return;
+      }
+
       const attempts = this.reconnectionAttempts.get(id) || 0;
       if (attempts < this.maxReconnectionAttempts) {
         const delay = Math.min(1000 * Math.pow(2, attempts), 30000); 
