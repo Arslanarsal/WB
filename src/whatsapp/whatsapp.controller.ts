@@ -77,9 +77,6 @@ class SendMessageDto {
   })
   type: MessageType;
 
-  @ApiPropertyOptional()
-  isVoiceMode?: boolean;
-
   @ApiPropertyOptional({ description: 'Set true when sending to a LID instead of phone number' })
   isFromLid?: boolean;
 
@@ -208,7 +205,6 @@ export class WhatsappController {
           id,
           body?.url,
           body.number,
-          body?.isVoiceMode ? true : false,
           body.isFromLid ?? false,
           body.text,
           body.mentions ?? [],
