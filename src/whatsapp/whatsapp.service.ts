@@ -115,11 +115,11 @@ export class WhatsappService implements OnModuleInit {
     id: string,
     url: string,
     number: string,
-    isVoiceMode = false,
     isFromLid: boolean = false,
     caption?: string,
     mentions?: string[],
   ): Promise<any> {
+    let mimeType = 'application/octet-stream';
     try {
       if (!url || (!url.startsWith('http://') && !url.startsWith('https://'))) {
         throw new Error(
@@ -133,14 +133,23 @@ export class WhatsappService implements OnModuleInit {
       const urlParts = urlWithoutParams.split('.');
       const extension = urlParts[urlParts.length - 1].toLowerCase();
 
-      const mimeTypes = {
+      const audioExtensions = new Set(['mp3', 'ogg', 'oga', 'm4a', 'wav', 'aac', 'opus']);
+      if (audioExtensions.has(extension)) {
+        return this.sendText(
+          id,
+          number,
+          caption || 'Audio attachments are not supported. Please use text.',
+          isFromLid,
+          mentions,
+        );
+      }
+
+      const mimeTypes: Record<string, string> = {
         pdf: 'application/pdf',
         jpg: 'image/jpeg',
         jpeg: 'image/jpeg',
         png: 'image/png',
         mp4: 'video/mp4',
-        mp3: 'audio/mpeg',
-        ogg: 'audio/ogg; codecs=opus',
         doc: 'application/msword',
         docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
         xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -155,92 +164,49 @@ export class WhatsappService implements OnModuleInit {
         dcm: 'application/dicom',
       };
 
-      enum MediaType {
-        PDF = 'application/pdf',
-        JPG = 'image/jpeg',
-        JPEG = 'image/jpeg',
-        PNG = 'image/png',
-        MP4 = 'video/mp4',
-        MP3 = 'audio/mpeg',
-        OGG = 'audio/ogg; codecs=opus',
-        DOC = 'application/msword',
-        DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-        XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        XLS = 'application/vnd.ms-excel',
-        PPTX = 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-        PPT = 'application/vnd.ms-powerpoint',
-        TXT = 'text/plain',
-        RTF = 'application/rtf',
-        CSV = 'text/csv',
-        ZIP = 'application/zip',
-        DCM = 'application/dicom',
-        JSON = 'application/json',
-      }
-
-      const mimeType = mimeTypes[extension] || 'application/octet-stream';
-
+      mimeType = mimeTypes[extension] || 'application/octet-stream';
       const remoteJid = isFromLid ? `${number}@lid` : `${number}@s.whatsapp.net`;
 
       const res = await (() => {
-        if (mimeType === MediaType.PDF) {
+        if (mimeType === 'application/pdf') {
           return sock.sendMessage(remoteJid, {
-            document: { url: url },
+            document: { url },
             mimetype: mimeType,
             caption,
-            mentions,
-          });
-        } else if (
-          mimeType === MediaType.JPG ||
-          mimeType === MediaType.JPEG ||
-          mimeType === MediaType.PNG
-        ) {
-          return sock.sendMessage(remoteJid, {
-            image: { url: url },
-            mimetype: mimeType,
-            caption,
-            mentions,
-          });
-        } else if (mimeType === MediaType.MP4) {
-          return sock.sendMessage(remoteJid, {
-            video: { url: url },
-            mimetype: mimeType,
-            caption,
-            mentions,
-          });
-        } else if (mimeType === MediaType.MP3) {
-          return sock.sendMessage(remoteJid, {
-            audio: { url: url },
-            mimetype: mimeType,
-            caption,
-            mentions,
-          });
-        } else if (mimeType === MediaType.OGG) {
-          return sock.sendMessage(remoteJid, {
-            audio: { url: url },
-            mimetype: mimeType,
-            ptt: isVoiceMode,
-            mentions,
-          });
-        } else {
-          return sock.sendMessage(remoteJid, {
-            document: { url: url },
-            mimetype: mimeType,
             mentions,
           });
         }
+        if (mimeType === 'image/jpeg' || mimeType === 'image/png') {
+          return sock.sendMessage(remoteJid, {
+            image: { url },
+            mimetype: mimeType,
+            caption,
+            mentions,
+          });
+        }
+        if (mimeType === 'video/mp4') {
+          return sock.sendMessage(remoteJid, {
+            video: { url },
+            mimetype: mimeType,
+            caption,
+            mentions,
+          });
+        }
+        return sock.sendMessage(remoteJid, {
+          document: { url },
+          mimetype: mimeType,
+          mentions,
+        });
       })();
 
       const wb_id =
         res && (res as any).key && (res as any).key.id != null
           ? (res as any).key.id
           : null;
-      const body = { wb_id, url, caption, mimeType, at: new Date() };
-
-      console.log(`Media sent successfully to ${number}`);
-      return body;
-    } catch (error) {
-      console.error(`Error sending media to ${number}:`, error);
-      return { wb_id: null, url, caption, mimeType: 'error', at: new Date() };
+      return { wb_id, url, caption, mimeType, at: new Date() };
+    } catch (error: any) {
+      console.error(`Error sending media to ${number}:`, error?.message || error);
+      return { wb_id: null, url, caption, mimeType, at: new Date() };
     }
   }
 

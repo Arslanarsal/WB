@@ -119,19 +119,30 @@ export class SessionManager {
 
       sock.ev.on('messages.upsert', async (m) => {
         try {
-          // Cache messages for getMessage retry support
+          const keysToAck: any[] = [];
           if (m.messages) {
             for (const msg of m.messages) {
               if (msg.key?.id && msg.message) {
                 msgStore.set(msg.key.id, msg);
-                // Evict oldest entries if store exceeds limit
                 if (msgStore.size > this.MESSAGE_STORE_LIMIT) {
                   const firstKey = msgStore.keys().next().value;
                   if (firstKey) msgStore.delete(firstKey);
                 }
               }
+              if (msg.key && !msg.key.fromMe && msg.message) {
+                keysToAck.push(msg.key);
+              }
             }
           }
+
+          if (keysToAck.length > 0) {
+            sock.readMessages(keysToAck).catch((err: any) => {
+              this.logger.warn(
+                `[${id}] readMessages failed: ${err?.message || 'Unknown error'}`,
+              );
+            });
+          }
+
           await this.handleMessagesUpsert(id, m, sock);
         } catch (error: any) {
           this.logger.error(
@@ -236,6 +247,10 @@ export class SessionManager {
       // End the socket to cancel pending internal operations (retry requests, etc.)
       // This prevents unhandled promise rejections from stale send attempts
       try {
+        if ((sock as any)._presenceHeartbeat) {
+          clearInterval((sock as any)._presenceHeartbeat);
+          delete (sock as any)._presenceHeartbeat;
+        }
         sock.end(undefined);
       } catch (_) {}
 
@@ -287,7 +302,23 @@ export class SessionManager {
       const phoneNumber = sock.user?.id?.split(':')[0] || 'Unknown';
       this.logger.log(`[${id}] ✅ WhatsApp connected! Phone: ${phoneNumber}`);
       this.reconnectionAttempts.delete(id);
-      
+
+      sock.sendPresenceUpdate('available').catch((err: any) => {
+        this.logger.warn(
+          `[${id}] Initial presence update failed: ${err?.message || 'Unknown error'}`,
+        );
+      });
+
+      if (sock._presenceHeartbeat) {
+        clearInterval(sock._presenceHeartbeat);
+      }
+      sock._presenceHeartbeat = setInterval(() => {
+        sock.sendPresenceUpdate('available').catch((err: any) => {
+          this.logger.warn(
+            `[${id}] Presence heartbeat failed: ${err?.message || 'Unknown error'}`,
+          );
+        });
+      }, 25000);
     }
   }
 
@@ -790,6 +821,10 @@ export class SessionManager {
         if (sock._healthCheckInterval) {
           clearInterval(sock._healthCheckInterval);
           delete sock._healthCheckInterval;
+        }
+        if (sock._presenceHeartbeat) {
+          clearInterval(sock._presenceHeartbeat);
+          delete sock._presenceHeartbeat;
         }
 
         this.logger.log('sock.ws?.readyState', sock.ws?.readyState);
