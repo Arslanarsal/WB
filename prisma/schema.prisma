@@ -19,3 +19,15 @@ model whats_app_session {
   @@index([sessionId], map: "idx_whats_app_session_sessionId")
   @@index([serverId], map: "idx_whats_app_session_serverId")
 }
+
+model wb_messages_cache {
+  id         Int      @id @default(autoincrement())
+  sessionId  String
+  messageId  String
+  message    Json
+  createdAt  DateTime @default(now())
+
+  @@unique([sessionId, messageId], map: "uniq_wb_msg_cache_session_message")
+  @@index([sessionId], map: "idx_wb_msg_cache_sessionId")
+  @@index([createdAt], map: "idx_wb_msg_cache_createdAt")
+}

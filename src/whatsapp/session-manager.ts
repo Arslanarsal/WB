@@ -70,9 +70,49 @@ export class SessionManager {
         maxMsgRetryCount: 5,
         qrTimeout: 60000,
         markOnlineOnConnect: true,
+        emitOwnEvents: true,
+        generateHighQualityLinkPreview: false,
+        patchMessageBeforeSending: (message: any) => {
+          const requiresPatch = !!(
+            message.buttonsMessage ||
+            message.templateMessage ||
+            message.listMessage
+          );
+          if (requiresPatch) {
+            message = {
+              viewOnceMessage: {
+                message: {
+                  messageContextInfo: {
+                    deviceListMetadataVersion: 2,
+                    deviceListMetadata: {},
+                  },
+                  ...message,
+                },
+              },
+            };
+          }
+          return message;
+        },
         getMessage: async (key) => {
-          const msg = msgStore.get(key.id!);
-          return msg?.message || undefined;
+          if (!key.id) return undefined;
+          const cached = msgStore.get(key.id);
+          if (cached?.message) return cached.message;
+
+          try {
+            const row = await this.prisma.wb_messages_cache.findUnique({
+              where: {
+                sessionId_messageId: { sessionId: id, messageId: key.id },
+              },
+            });
+            if (row?.message) {
+              return row.message as any;
+            }
+          } catch (err: any) {
+            this.logger.warn(
+              `[${id}] getMessage DB fallback failed: ${err?.message || 'Unknown error'}`,
+            );
+          }
+          return undefined;
         },
       });
 
@@ -120,6 +160,7 @@ export class SessionManager {
       sock.ev.on('messages.upsert', async (m) => {
         try {
           const keysToAck: any[] = [];
+          const toCache: { messageId: string; message: any }[] = [];
           if (m.messages) {
             for (const msg of m.messages) {
               if (msg.key?.id && msg.message) {
@@ -128,6 +169,7 @@ export class SessionManager {
                   const firstKey = msgStore.keys().next().value;
                   if (firstKey) msgStore.delete(firstKey);
                 }
+                toCache.push({ messageId: msg.key.id, message: msg.message });
               }
               if (msg.key && !msg.key.fromMe && msg.message) {
                 keysToAck.push(msg.key);
@@ -141,6 +183,22 @@ export class SessionManager {
                 `[${id}] readMessages failed: ${err?.message || 'Unknown error'}`,
               );
             });
+          }
+
+          if (toCache.length > 0) {
+            Promise.all(
+              toCache.map(({ messageId, message }) =>
+                this.prisma.wb_messages_cache
+                  .upsert({
+                    where: {
+                      sessionId_messageId: { sessionId: id, messageId },
+                    },
+                    create: { sessionId: id, messageId, message: message as any },
+                    update: { message: message as any },
+                  })
+                  .catch(() => undefined),
+              ),
+            ).catch(() => undefined);
           }
 
           await this.handleMessagesUpsert(id, m, sock);

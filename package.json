@@ -27,7 +27,7 @@
     "@nestjs/platform-express": "^11.1.5",
     "@nestjs/swagger": "^11.2.0",
     "@prisma/client": "^6.14.0",
-    "@whiskeysockets/baileys": "6.7.21",
+    "@whiskeysockets/baileys": "6.17.16",
     "audio-decode": "^2.2.3",
     "axios": "^1.11.0",
     "link-preview-js": "^3.1.0",
