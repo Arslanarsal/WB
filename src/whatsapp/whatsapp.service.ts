@@ -16,7 +16,6 @@ export class WhatsappService implements OnModuleInit {
     try {
       console.log('Initializing WhatsApp service...');
       const sessionsFromDb = await this.prisma.whats_app_session.findMany({
-        where: { serverId: Number(process.env.SERVER_ID) },
         select: { sessionId: true },
       });
 

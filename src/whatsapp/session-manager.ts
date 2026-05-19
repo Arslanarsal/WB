@@ -794,7 +794,6 @@ export class SessionManager {
 
   async listSessions(): Promise<any> {
     const allDbSessions = await this.prisma.whats_app_session.findMany({
-      where: { serverId: Number(process.env.SERVER_ID) },
       select: { sessionId: true },
     });
     return { sessions: allDbSessions.map((s) => s.sessionId) };
@@ -901,7 +900,7 @@ export class SessionManager {
 
       const deletedSession = await this.prisma.whats_app_session
         .delete({
-          where: { sessionId: id, serverId: Number(process.env.SERVER_ID) },
+          where: { sessionId: id },
         })
         .catch(() => null);
       this.logger.log('deletedSession', deletedSession);

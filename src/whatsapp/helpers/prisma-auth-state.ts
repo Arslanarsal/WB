@@ -10,7 +10,6 @@ export const createPrismaAuthState = async (
   const initialData = await prisma.whats_app_session.findUnique({
     where: {
       sessionId,
-      serverId: Number(process.env.SERVER_ID),
     },
   });
 
@@ -38,11 +37,9 @@ export const createPrismaAuthState = async (
           where: { sessionId },
           create: {
             sessionId,
-            serverId: Number(process.env.SERVER_ID),
             ...jsonData,
           },
           update: {
-            serverId: Number(process.env.SERVER_ID),
             ...jsonData,
           },
         });
