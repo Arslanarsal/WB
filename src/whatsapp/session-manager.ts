@@ -4,17 +4,13 @@ if (!global.crypto) {
   (global as any).crypto = webcrypto;
 }
 
-import {
-  makeWASocket,
-  DisconnectReason,
-  WASocket,
-  downloadMediaMessage,
-  WAPresence,
-  fetchLatestWaWebVersion,
-} from '@whiskeysockets/baileys';
+// Type-only import — erased at compile time, safe in CommonJS.
+import type { WASocket } from '@whiskeysockets/baileys';
+// Runtime values are loaded dynamically per session (Baileys v7 is ESM-only).
 import * as qrcode from 'qrcode';
 import axios from 'axios';
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
+import pino from 'pino';
 import { createPrismaAuthState } from './helpers/prisma-auth-state';
 import { StorageService } from './storage-service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -36,7 +32,22 @@ export class SessionManager {
   private messageStores = new Map<string, Map<string, any>>();
   private readonly maxReconnectionAttempts = 5;
   private readonly MESSAGE_STORE_LIMIT = 5000;
-  private readonly logger = new Logger(SessionManager.name);
+  // Baileys-compatible pino logger. Level driven by env (default 'info').
+  private readonly logger = pino({
+    name: 'SessionManager',
+    level: process.env.BAILEYS_LOG_LEVEL || 'info',
+  });
+
+  // Cached Baileys ESM module. Loaded lazily once via dynamic import.
+  private baileysModule: Promise<any> | null = null;
+  private getBaileys(): Promise<any> {
+    if (!this.baileysModule) {
+      this.baileysModule = Function(
+        'return import("@whiskeysockets/baileys")',
+      )() as Promise<any>;
+    }
+    return this.baileysModule;
+  }
 
   constructor(
     private prisma: PrismaService,
@@ -49,7 +60,11 @@ export class SessionManager {
     phoneNumber?: string,
   ): Promise<Session> {
     try {
-      this.logger.log(`[${id}] Creating WhatsApp session${usePairingCode ? ' with pairing code' : ''}...`);
+      this.logger.info(`[${id}] Creating WhatsApp session${usePairingCode ? ' with pairing code' : ''}...`);
+      // Baileys v7 is ESM-only — loaded via cached dynamic import (see getBaileys()).
+      const baileys = await this.getBaileys();
+      const makeWASocket = baileys.default?.makeWASocket || baileys.makeWASocket || baileys.default;
+      const { fetchLatestWaWebVersion } = baileys;
       const { state, saveCreds } = await createPrismaAuthState(id, this.prisma);
       const { version, isLatest } = await fetchLatestWaWebVersion({});
 
@@ -62,7 +77,7 @@ export class SessionManager {
       const sock = makeWASocket({
         auth: state,
         version,
-        printQRInTerminal: false,
+        logger: this.logger.child({ session: id }) as any,
         connectTimeoutMs: 60000,
         defaultQueryTimeoutMs: 60000,
         keepAliveIntervalMs: 10000,
@@ -121,15 +136,15 @@ export class SessionManager {
         try {
           const cleanPhoneNumber = phoneNumber.replace(/\D/g, '');
           await new Promise(resolve => setTimeout(resolve, 2000));
-          this.logger.log(`[${id}] Requesting pairing code for phone number: ${cleanPhoneNumber}`);
+          this.logger.info(`[${id}] Requesting pairing code for phone number: ${cleanPhoneNumber}`);
           const pairingCode = await sock.requestPairingCode(cleanPhoneNumber);
           this.pairingCodes.set(id, pairingCode);
-          this.logger.log(`[${id}] Pairing code received: ${pairingCode}`);
+          this.logger.info(`[${id}] Pairing code received: ${pairingCode}`);
         } catch (error: any) {
           this.logger.error(`[${id}] Error requesting pairing code:`, error?.message || 'Unknown error');
           const fallbackCode = Math.floor(10000000 + Math.random() * 90000000).toString();
           this.pairingCodes.set(id, fallbackCode);
-          this.logger.log(`[${id}] Generated fallback pairing code: ${fallbackCode}`);
+          this.logger.info(`[${id}] Generated fallback pairing code: ${fallbackCode}`);
         }
       }
 
@@ -230,7 +245,7 @@ export class SessionManager {
             };
 
             if (update.status && update.status > 2) {
-              this.logger.log(` Message status update`, { session: id, body });
+              this.logger.info({ session: id, body }, 'Message status update');
               this.sendUpdateMessageHookWithRetry(body);
             }
           }
@@ -245,7 +260,7 @@ export class SessionManager {
 
       const sessionPhone =sock?.user?.id?.split(':')[0] || 'Pending authentication';
 
-      this.logger.log(
+      this.logger.info(
         `[${id}] ✅ Session created successfully${sock?.user ? `, Phone: ${sessionPhone}` : ' (awaiting connection)'}`,
       );
       return session;
@@ -277,28 +292,31 @@ export class SessionManager {
     if (connection === 'open' || connection === 'close') {
       this.notifyApiOfStatusChange(id, connection, sock, lastDisconnect).catch(
         (err) => {
-          this.logger.error('status-api', {
-            context: 'handleConnectionUpdate',
-            error: err.message,
-            parameters: { id, connection, lastDisconnect },
-          });
+          this.logger.error(
+            {
+              context: 'handleConnectionUpdate',
+              error: err.message,
+              parameters: { id, connection, lastDisconnect },
+            },
+            'status-api',
+          );
         },
       );
     }
     if (qr) {
       this.qrCodes.set(id, qr);
-      this.logger.log(`[${id}] QR code generated (terminal display disabled)`);
+      this.logger.info(`[${id}] QR code generated (terminal display disabled)`);
     }
 
     if (connection === 'close') {
       const statusCode = lastDisconnect?.error?.output?.statusCode;
       const errorMessage = lastDisconnect?.error?.message;
-      const isLoggedOut = statusCode === DisconnectReason.loggedOut;
+      const isLoggedOut = statusCode === 401 /* DisconnectReason.loggedOut */;
       const isTimeout =
         statusCode === 408 || errorMessage?.includes('Timed Out');
-      const isConnectionLost = statusCode === DisconnectReason.connectionLost;
+      const isConnectionLost = statusCode === 408 /* DisconnectReason.connectionLost */;
 
-      this.logger.log(
+      this.logger.info(
         `[${id}] Connection closed. Status: ${statusCode}, Message: ${errorMessage}`,
       );
 
@@ -313,7 +331,7 @@ export class SessionManager {
       } catch (_) {}
 
       if (isLoggedOut) {
-        this.logger.log(
+        this.logger.info(
           `[${id}] ❌ Session logged out from mobile. Removing session.`,
         );
         this.removeSessionById(id);
@@ -324,7 +342,7 @@ export class SessionManager {
         statusCode === 440 || errorMessage?.toLowerCase()?.includes('conflict');
 
       if (isConflict) {
-        this.logger.log(
+        this.logger.info(
           `[${id}] ❌ Session conflict detected (Code: 440). Session keys are corrupted or another client connected. Removing session — a fresh QR scan is required.`,
         );
         this.removeSessionById(id);
@@ -334,7 +352,7 @@ export class SessionManager {
       const attempts = this.reconnectionAttempts.get(id) || 0;
       if (attempts < this.maxReconnectionAttempts) {
         const delay = Math.min(1000 * Math.pow(2, attempts), 30000); 
-        this.logger.log(
+        this.logger.info(
           `[${id}] Connection failed (attempt ${attempts + 1}/${this.maxReconnectionAttempts}). Retrying in ${delay}ms...`,
         );
 
@@ -358,7 +376,7 @@ export class SessionManager {
 
     if (connection === 'open') {
       const phoneNumber = sock.user?.id?.split(':')[0] || 'Unknown';
-      this.logger.log(`[${id}] ✅ WhatsApp connected! Phone: ${phoneNumber}`);
+      this.logger.info(`[${id}] ✅ WhatsApp connected! Phone: ${phoneNumber}`);
       this.reconnectionAttempts.delete(id);
 
       sock.sendPresenceUpdate('available').catch((err: any) => {
@@ -708,6 +726,7 @@ export class SessionManager {
         data?.message?.extendedTextMessage?.contextInfo?.externalAdReply ??
         null,
     };
+    const { downloadMediaMessage } = await this.getBaileys();
     try {
       if (
         data.key.fromMe == false ||
@@ -783,7 +802,7 @@ export class SessionManager {
         return payload;
       }
     } catch (e) {
-      this.logger.error('messageHandler error', { data, error: e });
+      this.logger.error({ data, error: e }, 'messageHandler error');
       payload.shouldNotifyWebhook = false;
       return payload;
     }
@@ -829,13 +848,13 @@ export class SessionManager {
         message: 'Session not found',
       };
     }
-    this.logger.log('session', session.sock.user);
+    this.logger.info({ user: session.sock.user }, 'session');
     const status = (session.connectionStatus || 'UNKNOWN').toUpperCase();
     const isActive = status !== 'CLOSE';
 
     const phoneNumber = session.sock?.user?.id?.split(':')[0] || 'Unknown';
 
-    this.logger.log(`[${id}] Session status: ${status}, Phone: ${phoneNumber}`);
+    this.logger.info(`[${id}] Session status: ${status}, Phone: ${phoneNumber}`);
 
     if (status === 'CLOSE' && session.lastDisconnectError) {
       return {
@@ -846,7 +865,7 @@ export class SessionManager {
       };
     }
 
-    this.logger.log('isActive', { isActive, phoneNumber });
+    this.logger.info({ isActive, phoneNumber }, 'isActive');
     return {
       status: isActive ? 'CONNECTED' : 'DISCONNECTED',
       isActive: isActive && phoneNumber !== 'Unknown',
@@ -884,7 +903,7 @@ export class SessionManager {
           delete sock._presenceHeartbeat;
         }
 
-        this.logger.log('sock.ws?.readyState', sock.ws?.readyState);
+        this.logger.info('sock.ws?.readyState', sock.ws?.readyState);
         await session.sock.logout();
       }
     } catch (error: any) {
@@ -903,7 +922,7 @@ export class SessionManager {
           where: { sessionId: id },
         })
         .catch(() => null);
-      this.logger.log('deletedSession', deletedSession);
+      this.logger.info({ deletedSession }, 'deletedSession');
 
       return {
         success: !!deletedSession,
@@ -941,7 +960,11 @@ export class SessionManager {
     };
   }
 
-  async mockTyping(id: string, number: string, presence: WAPresence) {
+  async mockTyping(
+    id: string,
+    number: string,
+    presence: 'unavailable' | 'available' | 'composing' | 'recording' | 'paused',
+  ) {
     const sock = this.getSession(id);
     if (!sock) {
       this.logger.warn(`No active session for ${id} when setting presence`);
@@ -1071,7 +1094,7 @@ export class SessionManager {
     } else {
       const statusCode = lastDisconnect?.error?.output?.statusCode;
       const errorMessage = lastDisconnect?.error?.message ?? 'Unknown reason';
-      if (statusCode === DisconnectReason.loggedOut) {
+      if (statusCode === 401 /* DisconnectReason.loggedOut */) {
         message = 'Session was logged out from the phone';
       } else {
         message = `Connection lost. Reason: ${errorMessage} (Code: ${statusCode ?? 'N/A'}).`;
@@ -1085,17 +1108,23 @@ export class SessionManager {
 
     try {
       await axios.post(webhookUrl, payload, { timeout: 15000 });
-      this.logger.log('status-api', {
-        context: 'notify-connection-status',
-        message: 'API notification sent successfully.',
-        parameters: payload,
-      });
+      this.logger.info(
+        {
+          context: 'notify-connection-status',
+          message: 'API notification sent successfully.',
+          parameters: payload,
+        },
+        'status-api',
+      );
     } catch (error: any) {
-      this.logger.error('status-api', {
-        context: 'notify-connection-status',
-        error: error.message,
-        parameters: payload,
-      });
+      this.logger.error(
+        {
+          context: 'notify-connection-status',
+          error: error.message,
+          parameters: payload,
+        },
+        'status-api',
+      );
     }
   }
 }
