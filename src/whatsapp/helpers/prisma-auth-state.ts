@@ -1,10 +1,14 @@
 import { PrismaClient } from '@prisma/client';
-import { initAuthCreds, BufferJSON } from '@whiskeysockets/baileys';
 
 export const createPrismaAuthState = async (
   sessionId: string,
   prisma: PrismaClient,
 ) => {
+  // Baileys v7 is ESM-only; load it via dynamic import so this CJS project can consume it.
+  const baileys: any = await (Function(
+    'return import("@whiskeysockets/baileys")',
+  )() as Promise<any>);
+  const { initAuthCreds, BufferJSON } = baileys;
   let writeTimeout: NodeJS.Timeout | undefined = undefined;
 
   const initialData = await prisma.whats_app_session.findUnique({
